@@ -20,6 +20,8 @@ scripts turn "it feels right" into a table.
 | `kpa_verify.py` | Main suite: 11 checks per endpoint, repeated runs, pass rates. |
 | `kpa_deep_probe.py` | Diagnostics that expose a translated or resold backend. |
 | `compare.py` | Scores another client's answers against the same ground truth. |
+| `expected_answers.json` | Committed ground truth, so `compare.py` works before the suite is run. |
+| `sample_other_answers.json` | Template for recording the other client's answers. |
 | `run_local.py` | Local convenience runner (reads keys from the OpenCode config). Not needed by other users. |
 
 ## Quick start
@@ -95,6 +97,10 @@ is right every time, or wrong every time.
 9. **Deterministic task pass rate.** Five runs per task, with the response id
    family printed per sample, so you can see whether failures cluster by backend.
 
+Note on `max_tokens`: some gateways force extended thinking on, which consumes
+the output budget before any visible text is produced. If every answer comes
+back empty, raise `MAX_TOKENS` (default 8000).
+
 ## Comparing with another client
 
 ```bash
@@ -121,6 +127,8 @@ client, one prompt per chat, then record the answers:
   "needle": "23556182"
 }
 ```
+
+`sample_other_answers.json` is a ready-made template for this.
 
 ```bash
 python3 compare.py other_answers.json
