@@ -19,6 +19,7 @@ scripts turn "it feels right" into a table.
 |---|---|
 | `kpa_verify.py` | Main suite: 11 checks per endpoint, repeated runs, pass rates. |
 | `kpa_deep_probe.py` | Diagnostics that expose a translated or resold backend. |
+| `route_family.py` | Pin requests to one upstream family and confirm you landed there. |
 | `compare.py` | Scores another client's answers against the same ground truth. |
 | `expected_answers.json` | Committed ground truth, so `compare.py` works before the suite is run. |
 | `sample_other_answers.json` | Template for recording the other client's answers. |
@@ -144,6 +145,40 @@ If both families live on the same host with different keys, opencode's plural
 `opencode models` then lists every model under one `kpa/` prefix and each one
 reaches its own endpoint. Keys stay in `0600` files outside the config.
 
+## Targeting one upstream family
+
+Some gateways serve more than one backend behind one URL. Measured behaviour
+shows the family is selected by request shape and by which key you
+authenticate with, not at random.
+
+`route_family.py` sends every request through one chosen shape and then
+verifies the answer behaviourally, so you confirm you landed on the family you
+wanted instead of assuming it:
+
+```bash
+python3 route_family.py --shape plain --samples 5
+python3 route_family.py --shape ws-system --samples 5
+python3 route_family.py --key gpt --shape plain --samples 5
+python3 route_family.py --shape ws-system --suite --suite-repeats 3
+```
+
+Shapes:
+
+| Shape | Dialect | Distinguishing feature |
+|---|---|---|
+| `plain` | `/messages` | No system field. |
+| `string-system` | `/messages` | Plain-text `system` string. |
+| `ws-system` | `/messages` | Whitespace-only `system` string. |
+| `empty-array-system` | `/messages` | Empty array `system`. |
+| `array-system` | `/messages` | Array-shaped `system` field. |
+| `openai-dialect` | `/chat/completions` | OpenAI dialect on the same host and key. |
+
+Each sample prints the observed family, the self-reported company, the
+knowledge cutoff, whether the 2024 US election came out right, and whether a
+`"You are ChatGPT"` system prompt leaked. The summary states whether the shape
+actually pinned a family, so a shape that does not select is reported as such
+rather than being mistaken for a working pin.
+
 ## Comparing with another client
 
 ```bash
@@ -214,8 +249,47 @@ prefix plus four behavioural tells:
 
 Family B was an OpenAI-compatible upstream wrapped in Anthropic shape, sold
 under a Claude model name. A single pass/fail run against that endpoint tells
-you nothing, because which backend you hit changes the answer. Run the
-rotation sweep first.
+you nothing, because which backend you hit changes the answer.
+
+### Pinning a family
+
+The family is selected by request shape and by which key you authenticate
+with. Measured over 5 rounds in random interleaved order:
+
+| Key | Shape | Family |
+|---|---|---|
+| claude | `/messages`, no system | A 5/5 |
+| claude | `/messages`, `system` = string | A 5/5 |
+| claude | `/messages`, `system` = `" "` | **B 5/5** |
+| claude | `/messages`, `system` = `[]` | **B 5/5** |
+| claude | `/messages`, `system` = `[{type:text}]` | **B 5/5** |
+| claude | `/chat/completions`, claude model | A 4/5, ? 1/5 |
+| claude | `/chat/completions`, gpt model | **B 5/5** |
+| gpt | `/messages`, claude model | **B 5/5** |
+| gpt | `/chat/completions`, gpt model | **B 5/5** |
+
+Read it as: a well-formed Anthropic request on the Anthropic key reaches
+family A. Anything the Anthropic-native path does not handle cleanly, or any
+request on the GPT key, falls through to family B.
+
+So the answer to "how do I force family B" is: send a malformed-ish system
+field, or use the GPT key. `route_family.py` does both and verifies the
+result.
+
+### What family B actually scores
+
+Deterministic suite, 5 runs each, forced to family B:
+
+| Task | Family B | Family A |
+|---|---|---|
+| multiply | 5/5 | 5/5 |
+| count `r` | 5/5 | 5/5 |
+| logic | 5/5 | 5/5 |
+| python closure stdout | **2/5** | 4/5 |
+
+Family B gets arithmetic and logic right but misses the Python closure trap
+more often. Its real tell is the knowledge cutoff: 2023-10 to 2024-06,
+versus 2026 for family A.
 
 ## Notes and limits
 
