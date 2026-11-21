@@ -235,11 +235,14 @@ upstream family of each response, and fails closed when it does not match
 what you asked for:
 
 ```bash
-# only accept native Anthropic responses
+# only accept native Anthropic responses (msg_01)
 python3 upstream_guard.py --port 8099 --expect claude
 
-# only accept OpenAI-shaped responses
-python3 upstream_guard.py --port 8099 --expect gpt
+# only accept OpenAI-shaped responses (chatcmpl-, resp_)
+python3 upstream_guard.py --port 8100 --expect gpt
+
+# accept every id shape
+python3 upstream_guard.py --port 8099 --expect any
 
 # log only, forward everything
 python3 upstream_guard.py --port 8099 --observe-only
@@ -250,6 +253,27 @@ A wrong-family response is refused with HTTP 502 and
 `upstream_family_mismatch`, so the client never silently receives a
 substitute model.
 
+One instance per client side, because the expectation differs. To keep the
+local token-compression proxy in the chain for the GPT models, point a second
+guard at it:
+
+```bash
+KPA_UPSTREAM=http://127.0.0.1:8080/v1 \
+    python3 upstream_guard.py --port 8100 --expect gpt
+```
+
+`--expect gpt` proves the id is OpenAI-shaped, not that the model is a
+genuine OpenAI one. For that, run `classify_models.py`.
+
+### Enforcement interrupts, on purpose
+
+Fail-closed means a session that the gateway moves to family B stops working:
+the client gets HTTP 502, retries, and eventually errors out. Observed on
+2026-11-21: a fresh opencode session answered `msg_01` on its first request
+and then `msg_kpa_` on the next eleven, so the guard rejected every one and
+the run failed. Another session on the same endpoint stayed on `msg_01`
+throughout. Measure first (`--observe-only`), then enforce.
+
 Every request is logged as one JSON line with the model, the system field
 shape, the response id and the verdict:
 
@@ -258,6 +282,41 @@ shape, the response id and the verdict:
  "system_blocks": 7, "stream": true, "has_tools": true,
  "response_id": "msg_kpa_9250fff9-...", "family": "B", "action": "rejected"}
 ```
+
+## Which API path each model family uses
+
+opencode picks the dialect from the provider package, not from the model name.
+A `claude-*` model is registered with `@opencode/ai/providers/anthropic-compatible`
+and a `gpt-*` model with `@opencode/ai/providers/openai-compatible`, so:
+
+| Models | opencode package | Path | Body dialect |
+|---|---|---|---|
+| `claude-opus-5-5`, `claude-fable-5-1/5-2`, `claude-sonnet-5`, ... | anthropic-compatible | `POST /v1/messages` | Anthropic Messages |
+| `gpt-5-6-sol`, `gpt-5-6-terra`, `gpt-5-6-luna`, `gpt-6-astra`, `gpt-5-5`, ... | openai-compatible | `POST /v1/chat/completions` | OpenAI Chat Completions |
+
+Confirmed from the local proxy's request log (`rtk-proxy` records path,
+provider and model): `/v1/chat/completions` with `gpt-5-6-luna` 1024 requests,
+`gpt-5-6-sol` 68, `gpt-5-6-terra` 62; `/v1/messages` with `claude-opus-5-5`
+from curl and from claude-code.
+
+The gateway itself speaks three dialects and normalises them:
+
+| Path | Status | Answer id |
+|---|---|---|
+| `GET /v1/models` | 200 | model catalogue, `token_counting: estimate` |
+| `POST /v1/messages` | 200 | `msg_01...` |
+| `POST /v1/messages/count_tokens` | 200 | `{"input_tokens": 37}` (estimated, not tokenized) |
+| `POST /v1/chat/completions` | 200 | `chatcmpl-...` |
+| `POST /v1/responses` | 200 | `resp_...` (claude models only; gpt models get 404) |
+| `POST /v1/completions`, `/v1/embeddings`, `/v1/messages/batches` | 404 | not exposed |
+
+The point of several paths is client compatibility. `/v1/messages` is the
+Anthropic surface (Claude Code, the Anthropic SDKs), `/v1/chat/completions`
+the OpenAI surface (OpenAI SDKs, most libraries), `/v1/responses` the current
+OpenAI surface. One gateway can therefore serve every client it might be
+sold to, and the dialect you pick decides which upstream pool handles your
+traffic. On this gateway the Anthropic surface is the one that can reach
+native Anthropic; the OpenAI surfaces answer from the translated backend.
 
 ## Classifying every model
 
@@ -331,6 +390,7 @@ first.
 | `msg_01...` response id | Native Anthropic upstream. |
 | `msg_kpa_...` response id | Anthropic-shaped id minted by the gateway. Not native. |
 | `chatcmpl-...` response id | OpenAI-shaped upstream behind an Anthropic route. |
+| `resp_...` response id | OpenAI Responses dialect, same OpenAI-shaped upstream. |
 | Rate limit counters never decrement | Headers are synthesised, not passed through. |
 | `cache_read` on a request you sent nothing to | A prefix is being injected and cached. |
 | Identical chars-per-token across English, CJK and symbols | Token count is estimated, not tokenized. |

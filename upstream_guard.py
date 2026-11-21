@@ -16,10 +16,20 @@ response look right. This proxy logs every request with that verdict and can
 reject the ones that landed on the wrong upstream, so a client never silently
 receives a substitute.
 
-Usage:
+One instance per client side, because the expectation differs:
+
+    # Claude models: native Anthropic only
     python3 upstream_guard.py --port 8099 --expect claude
-    python3 upstream_guard.py --port 8099 --expect gpt
+
+    # GPT models: OpenAI-shaped ids only, in front of the local proxy
+    KPA_UPSTREAM=http://127.0.0.1:8080/v1 \
+        python3 upstream_guard.py --port 8100 --expect gpt
+
+    # log only
     python3 upstream_guard.py --port 8099 --observe-only
+
+Note that --expect gpt proves the id is OpenAI-shaped, not that the model is
+a genuine OpenAI one. For that, run classify_models.py.
 
 Then point the client at http://127.0.0.1:8099/v1 instead of the gateway.
 """
@@ -43,9 +53,19 @@ LOG_PATH = os.environ.get("GUARD_LOG", "/tmp/upstream_guard.log")
 NATIVE = "msg_01"
 MINTED = "msg_kpa_"
 OPENAI = "chatcmpl-"
+RESPONSES = "resp_"
 
-FAMILY_A = {NATIVE}
-FAMILY_B = {MINTED, OPENAI}
+# Three classes, not two. msg_kpa_ is Anthropic-shaped but minted by the
+# gateway; chatcmpl- is OpenAI-shaped. A guard that accepts "not native" as
+# a single family lets an Anthropic-shaped substitute pass as an OpenAI one.
+FAMILY_A = "A"
+FAMILY_OPENAI = "B-openai"
+FAMILY_MINTED = "B-anthropic"
+EXPECTED_FAMILY = {
+    "claude": {FAMILY_A},
+    "gpt": {FAMILY_OPENAI},
+    "any": {FAMILY_A, FAMILY_OPENAI, FAMILY_MINTED},
+}
 
 
 def log_line(payload):
@@ -75,17 +95,34 @@ def upstream_base():
             or "https://api.kpalabz.com/v1").rstrip("/")
 
 
+def upstream_path_of(path):
+    """Join the request path with the upstream base without doubling /v1.
+
+    The base may or may not already end in /v1, and the client may or may not
+    send the /v1 prefix. /v1/chat/completions and /chat/completions both have
+    to end up as one /v1/chat/completions.
+    """
+    request_path = path if path.startswith("/") else "/" + path
+    if upstream_base().endswith("/v1"):
+        if request_path == "/v1":
+            return "/"
+        if request_path.startswith("/v1/"):
+            return request_path[3:]
+        return request_path
+    if not request_path.startswith("/v1/"):
+        return "/v1" + request_path
+    return request_path
+
+
 def id_family(identifier):
     if identifier.startswith(NATIVE):
-        return "A"
+        return FAMILY_A
     if identifier.startswith(MINTED):
-        return "B"
-    if identifier.startswith(OPENAI):
-        return "B"
+        return FAMILY_MINTED
+    if identifier.startswith(OPENAI) or identifier.startswith(RESPONSES):
+        return FAMILY_OPENAI
     return "unknown"
 
-
-EXPECTED_FAMILY = {"claude": "A", "gpt": "B"}
 
 
 def forward(path, headers, body, timeout=600):
@@ -100,8 +137,22 @@ def forward(path, headers, body, timeout=600):
         return 502, json.dumps({"error": str(exc)}).encode(), {}
 
 
+def header_value(headers, name):
+    """Case-insensitive header lookup. Upstreams send content-type, not
+    Content-Type, and a missed lookup turns an SSE body into a parse error."""
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return ""
+
+
 def parse_sse(raw):
-    """Pull the id out of an Anthropic SSE stream."""
+    """Pull the response id out of a stream, in any of the gateway's dialects.
+
+    Anthropic  data: {"type": "message_start", "message": {"id": "msg_01..."}}
+    OpenAI     data: {"id": "chatcmpl-...", "object": "chat.completion.chunk"}
+    Responses  data: {"type": "response.created", "response": {"id": "resp_..."}}
+    """
     for line in raw.decode(errors="replace").splitlines():
         if not line.startswith("data:"):
             continue
@@ -114,6 +165,10 @@ def parse_sse(raw):
             continue
         if obj.get("type") == "message_start":
             return obj.get("message", {}).get("id", "")
+        if obj.get("object", "").startswith("chat.completion"):
+            return obj.get("id", "")
+        if str(obj.get("type", "")).startswith("response."):
+            return obj.get("response", {}).get("id", "")
     return ""
 
 
@@ -134,8 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         upstream_path = self.path
         if not upstream_path.startswith("/"):
             upstream_path = "/" + upstream_path
-        if not upstream_path.startswith("/v1/"):
-            upstream_path = "/v1" + upstream_path
+        upstream_path = upstream_path_of(upstream_path)
 
         headers = {}
         for key, value in self.headers.items():
@@ -145,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
 
         status, body, response_headers = forward(upstream_path, headers, raw)
 
-        streaming = "text/event-stream" in (response_headers.get("Content-Type") or "")
+        streaming = "text/event-stream" in header_value(response_headers, "content-type")
         if streaming:
             identifier = parse_sse(body)
         else:
@@ -198,9 +252,9 @@ class Handler(BaseHTTPRequestHandler):
         # Fail closed. A wrong-family response is a substitute model, so refuse
         # it instead of passing it to the client.
         wanted = EXPECTED_FAMILY.get(self.server.expected)
-        if wanted and family != wanted:
+        if wanted and family not in wanted:
             record["action"] = "rejected"
-            record["reason"] = "expected family %s, got %s" % (wanted, family)
+            record["reason"] = "expected family %s, got %s" % (sorted(wanted), family)
             log_line(record)
             print(brief(record), flush=True)
             error = json.dumps({
@@ -208,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                 "error": {
                     "type": "upstream_family_mismatch",
                     "message": ("upstream returned family %s, expected %s. Response id was %r."
-                                % (family, wanted, identifier)),
+                                % (family, sorted(wanted), identifier)),
                 },
             }).encode()
             self.send_response(502)
@@ -224,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(status)
         self.send_header("Content-Type",
-                         response_headers.get("Content-Type", "application/json"))
+                         header_value(response_headers, "content-type") or "application/json")
         self.send_header("Content-Length", str(len(body)))
         for key, value in response_headers.items():
             if key.lower() in ("content-type", "content-length", "transfer-encoding",
@@ -239,9 +293,10 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8099)
-    parser.add_argument("--expect", default="", choices=["", "claude", "gpt"],
-                        help="claude = only accept native Anthropic ids, "
-                             "gpt = only accept OpenAI-shaped ids")
+    parser.add_argument("--expect", default="", choices=["", "claude", "gpt", "any"],
+                        help="claude = only accept native Anthropic ids (msg_01), "
+                             "gpt = only accept OpenAI-shaped ids (chatcmpl-), "
+                             "any = accept every id shape")
     parser.add_argument("--observe-only", action="store_true",
                         help="log only, forward everything")
     args = parser.parse_args()
@@ -250,9 +305,14 @@ def main():
     print("expect         : %s" % (args.expect or "(observe only)"))
     print("log            : %s" % LOG_PATH)
     print("")
-    print("  msg_01...    native Anthropic      -> family A")
-    print("  msg_kpa_...  gateway-minted shape  -> family B")
-    print("  chatcmpl-... OpenAI shape          -> family B")
+    print("  msg_01...    native Anthropic      -> A")
+    print("  msg_kpa_...  gateway-minted shape  -> B-anthropic")
+    print("  chatcmpl-... OpenAI shape          -> B-openai")
+    print("  resp_...     OpenAI Responses shape-> B-openai")
+    print("")
+    print("  --expect claude  accepts A only")
+    print("  --expect gpt     accepts B-openai only (chatcmpl-, resp_)")
+    print("  --expect any     accepts all of them")
     print("")
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
