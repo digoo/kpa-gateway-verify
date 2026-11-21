@@ -20,6 +20,9 @@ scripts turn "it feels right" into a table.
 | `kpa_verify.py` | Main suite: 11 checks per endpoint, repeated runs, pass rates. |
 | `kpa_deep_probe.py` | Diagnostics that expose a translated or resold backend. |
 | `route_family.py` | Pin requests to one upstream family and confirm you landed there. |
+| `classify_models.py` | Classify every model id into family A (genuine) or family B (the rest). |
+| `upstream_guard.py` | Proxy that verifies each response came from the expected upstream. |
+| `extract_prefix.py` | Recovers the instruction prefix the gateway injects. |
 | `compare.py` | Scores another client's answers against the same ground truth. |
 | `expected_answers.json` | Committed ground truth, so `compare.py` works before the suite is run. |
 | `sample_other_answers.json` | Template for recording the other client's answers. |
@@ -179,6 +182,64 @@ knowledge cutoff, whether the 2024 US election came out right, and whether a
 actually pinned a family, so a shape that does not select is reported as such
 rather than being mistaken for a working pin.
 
+## Guarding a client
+
+Request shape is not a reliable selector: the same shape has been observed
+returning both families minutes apart. The only dependable check is the
+response id, on every single response.
+
+`upstream_guard.py` sits between a client and the gateway, verifies the
+upstream family of each response, and fails closed when it does not match
+what you asked for:
+
+```bash
+# only accept native Anthropic responses
+python3 upstream_guard.py --port 8099 --expect claude
+
+# only accept OpenAI-shaped responses
+python3 upstream_guard.py --port 8099 --expect gpt
+
+# log only, forward everything
+python3 upstream_guard.py --port 8099 --observe-only
+```
+
+Then point the client at `http://127.0.0.1:8099/v1` instead of the gateway.
+A wrong-family response is refused with HTTP 502 and
+`upstream_family_mismatch`, so the client never silently receives a
+substitute model.
+
+Every request is logged as one JSON line with the model, the system field
+shape, the response id and the verdict:
+
+```json
+{"time": "...", "model": "claude-opus-5-5", "system_type": "list",
+ "system_blocks": 7, "stream": true, "has_tools": true,
+ "response_id": "msg_kpa_9250fff9-...", "family": "B", "action": "rejected"}
+```
+
+## Classifying every model
+
+```bash
+python3 classify_models.py --samples 3 --json out/classification.json
+```
+
+Probes every model id the key exposes and sorts each into family A or family
+B. The verdict requires the self-report, the knowledge cutoff and the 2024
+election answer to agree. A model that claims to be OpenAI but has a 2024-06
+cutoff and gets the 2024 election wrong is not OpenAI, so it lands in family
+B.
+
+## Recovering the injected prefix
+
+```bash
+python3 extract_prefix.py
+```
+
+A request that sends no system field still comes back with thousands of
+cached input tokens. That is the prefix the gateway injects. This script
+recovers it by asking the model to name the headings of the instruction text
+that precedes the message.
+
 ## Comparing with another client
 
 ```bash
@@ -225,10 +286,10 @@ first.
 | T1 input tokens in the hundreds | Hidden system prompt injected. |
 | T3 prints a system prompt instead of refusing | Same thing, and now visible. |
 | `model` field differs from what you asked for | Immediate red flag. |
-| `msg_` vs `chatcmpl-` ids across calls | Two different backends behind one endpoint. |
-| Short hex thinking signatures | Anthropic shape synthesised over another backend. |
-| `output_tokens_details.thinking_tokens` missing | OpenAI-shaped backend behind an Anthropic route. |
-| `Anthropic-Ratelimit-*` never decrements | Headers are synthesised, not passed through. |
+| `msg_01...` response id | Native Anthropic upstream. |
+| `msg_kpa_...` response id | Anthropic-shaped id minted by the gateway. Not native. |
+| `chatcmpl-...` response id | OpenAI-shaped upstream behind an Anthropic route. |
+| Rate limit counters never decrement | Headers are synthesised, not passed through. |
 | `cache_read` on a request you sent nothing to | A prefix is being injected and cached. |
 | Identical chars-per-token across English, CJK and symbols | Token count is estimated, not tokenized. |
 | T5-T9 fail while the control client passes | Probably a weaker or different model. |
