@@ -101,6 +101,41 @@ Note on `max_tokens`: some gateways force extended thinking on, which consumes
 the output budget before any visible text is produced. If every answer comes
 back empty, raise `MAX_TOKENS` (default 8000).
 
+## Two endpoints, one provider in opencode
+
+If both families live on the same host with different keys, opencode's plural
+`providers` key handles it without a proxy. Each model entry can override
+`settings.baseURL`, `settings.apiKey` and `package` independently:
+
+```json
+{
+  "providers": {
+    "kpa": {
+      "name": "KPA",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:8080/v1" },
+      "models": {
+        "gpt-5-6-sol": {
+          "name": "GPT-5.6 Sol",
+          "settings": { "apiKey": "{file:~/.config/opencode/secrets/kpalabz-gpt.key}" }
+        },
+        "claude-opus-5-5": {
+          "name": "Claude Opus 5.5",
+          "package": "@opencode/ai/providers/anthropic-compatible",
+          "settings": {
+            "baseURL": "https://api.kpalabz.com/v1",
+            "apiKey": "{file:~/.config/opencode/secrets/kpalabz-claude.key}"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`opencode models` then lists every model under one `kpa/` prefix and each one
+reaches its own endpoint. Keys stay in `0600` files outside the config.
+
 ## Comparing with another client
 
 ```bash
