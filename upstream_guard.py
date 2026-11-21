@@ -54,18 +54,28 @@ NATIVE = "msg_01"
 MINTED = "msg_kpa_"
 OPENAI = "chatcmpl-"
 RESPONSES = "resp_"
+GENERIC = "gw-"
 
-# Three classes, not two. msg_kpa_ is Anthropic-shaped but minted by the
-# gateway; chatcmpl- is OpenAI-shaped. A guard that accepts "not native" as
-# a single family lets an Anthropic-shaped substitute pass as an OpenAI one.
+# Four classes, not two. msg_kpa_ and gw- are gateway-minted; chatcmpl- and
+# resp- are OpenAI-shaped. A guard that accepts "not native" as a single
+# family lets an Anthropic-shaped substitute pass as an OpenAI one.
 FAMILY_A = "A"
 FAMILY_OPENAI = "B-openai"
-FAMILY_MINTED = "B-anthropic"
+FAMILY_MINTED = "B-minted"
 EXPECTED_FAMILY = {
     "claude": {FAMILY_A},
     "gpt": {FAMILY_OPENAI},
-    "any": {FAMILY_A, FAMILY_OPENAI, FAMILY_MINTED},
+    "any": {FAMILY_A, FAMILY_OPENAI, FAMILY_MINTED, "unknown"},
 }
+# by-model: the requested model decides what id shape is acceptable. A claude
+# model has to come back as native Anthropic; a gpt model has to come back
+# OpenAI-shaped, whatever dialect the request used.
+MODEL_PREFIX_FAMILY = (
+    ("claude", {FAMILY_A}),
+    ("gpt", {FAMILY_OPENAI, FAMILY_MINTED}),
+    ("o1", {FAMILY_OPENAI, FAMILY_MINTED}),
+    ("o3", {FAMILY_OPENAI, FAMILY_MINTED}),
+)
 
 
 def log_line(payload):
@@ -114,10 +124,21 @@ def upstream_path_of(path):
     return request_path
 
 
+def expected_for(model, mode):
+    """Which id families are acceptable for this request."""
+    if mode == "by-model":
+        name = (model or "").lower()
+        for prefix, families in MODEL_PREFIX_FAMILY:
+            if name.startswith(prefix):
+                return families
+        return EXPECTED_FAMILY["any"]
+    return EXPECTED_FAMILY.get(mode)
+
+
 def id_family(identifier):
     if identifier.startswith(NATIVE):
         return FAMILY_A
-    if identifier.startswith(MINTED):
+    if identifier.startswith(MINTED) or identifier.startswith(GENERIC):
         return FAMILY_MINTED
     if identifier.startswith(OPENAI) or identifier.startswith(RESPONSES):
         return FAMILY_OPENAI
@@ -251,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Fail closed. A wrong-family response is a substitute model, so refuse
         # it instead of passing it to the client.
-        wanted = EXPECTED_FAMILY.get(self.server.expected)
+        wanted = expected_for(request_body.get("model", ""), self.server.expected)
         if wanted and family not in wanted:
             record["action"] = "rejected"
             record["reason"] = "expected family %s, got %s" % (sorted(wanted), family)
@@ -293,30 +314,36 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8099)
-    parser.add_argument("--expect", default="", choices=["", "claude", "gpt", "any"],
+    parser.add_argument("--expect", default="",
+                        choices=["", "claude", "gpt", "any", "by-model"],
                         help="claude = only accept native Anthropic ids (msg_01), "
-                             "gpt = only accept OpenAI-shaped ids (chatcmpl-), "
+                             "gpt = only accept OpenAI-shaped ids (chatcmpl-, resp_), "
+                             "by-model = the requested model decides: claude* must "
+                             "come back native, gpt* must come back OpenAI-shaped, "
                              "any = accept every id shape")
     parser.add_argument("--observe-only", action="store_true",
                         help="log only, forward everything")
     args = parser.parse_args()
+    args.expected = "" if args.observe_only else args.expect
 
     print("upstream guard  http://127.0.0.1:%d -> %s" % (args.port, upstream_base()))
-    print("expect         : %s" % (args.expect or "(observe only)"))
+    print("expect         : %s" % (args.expected if args.expected else "(observe only)"))
     print("log            : %s" % LOG_PATH)
     print("")
     print("  msg_01...    native Anthropic      -> A")
-    print("  msg_kpa_...  gateway-minted shape  -> B-anthropic")
+    print("  msg_kpa_...  gateway-minted shape  -> B-minted")
+    print("  gw-...       gateway-minted generic-> B-minted")
     print("  chatcmpl-... OpenAI shape          -> B-openai")
     print("  resp_...     OpenAI Responses shape-> B-openai")
     print("")
-    print("  --expect claude  accepts A only")
-    print("  --expect gpt     accepts B-openai only (chatcmpl-, resp_)")
-    print("  --expect any     accepts all of them")
+    print("  --expect claude    accepts A only")
+    print("  --expect gpt       accepts B-openai only (chatcmpl-, resp_)")
+    print("  --expect by-model  claude* -> A, gpt* -> B-openai or B-minted")
+    print("  --expect any       accepts all of them")
     print("")
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    server.expected = args.expect
+    server.expected = "" if args.observe_only else args.expect
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -241,6 +241,9 @@ python3 upstream_guard.py --port 8099 --expect claude
 # only accept OpenAI-shaped responses (chatcmpl-, resp_)
 python3 upstream_guard.py --port 8100 --expect gpt
 
+# the requested model decides: claude* must be native, gpt* OpenAI-shaped
+python3 upstream_guard.py --port 8099 --expect by-model
+
 # accept every id shape
 python3 upstream_guard.py --port 8099 --expect any
 
@@ -261,6 +264,22 @@ guard at it:
 KPA_UPSTREAM=http://127.0.0.1:8080/v1 \
     python3 upstream_guard.py --port 8100 --expect gpt
 ```
+
+With `--expect by-model` one instance covers both sides, because the
+acceptable id shape follows the requested model.
+
+### Running it as a service
+
+```bash
+cp ~/Library/LaunchAgents/app.kpa.upstream-guard.plist ~/Library/LaunchAgents/  # if not there
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.kpa.upstream-guard.plist
+launchctl kickstart -k gui/$(id -u)/app.kpa.upstream-guard
+```
+
+The service runs `--expect any` so it observes without breaking a session.
+Its log is one JSON line per response at
+`~/Library/Logs/kpa-upstream-guard.jsonl`, with the response id, the family
+and the verdict.
 
 `--expect gpt` proves the id is OpenAI-shaped, not that the model is a
 genuine OpenAI one. For that, run `classify_models.py`.
@@ -317,6 +336,86 @@ OpenAI surface. One gateway can therefore serve every client it might be
 sold to, and the dialect you pick decides which upstream pool handles your
 traffic. On this gateway the Anthropic surface is the one that can reach
 native Anthropic; the OpenAI surfaces answer from the translated backend.
+
+## Compression, and which dialect gets it
+
+The local `rtk-proxy` (127.0.0.1:8080) compresses tool results before they
+reach the model. It only recognises the Anthropic wire format: a
+`tool_result` content block. Measured with a 29k-char tool result:
+
+| Dialect | Sent | Recorded as tool result | Tokens saved |
+|---|---|---|---|
+| `/v1/messages` (Anthropic) | 29,089 chars | 1,453 tokens | **8,948** |
+| `/v1/chat/completions` (OpenAI) | 29,089 chars | 0 tokens | 0 |
+
+So the OpenAI dialect gets no compression at all. The gateway serves the gpt
+models over the Anthropic dialect too (`POST /v1/messages` with
+`model: gpt-5-6-sol` returns 200, with working `tool_use` blocks), and the
+upstream behind it is the same OpenAI-shaped one, so moving the gpt models to
+the Anthropic dialect buys the compression without changing the backend.
+
+The chain that gives both families compression, with the guard in front:
+
+```
+opencode  ->  guard :8099  ->  rtk-proxy :8080  ->  api.kpalabz.com
+```
+
+Two guard instances are not needed any more: `--expect by-model` picks the
+acceptable id shape from the requested model, so one port serves both sides.
+
+```bash
+KPA_UPSTREAM=http://127.0.0.1:8080/v1 \
+    python3 upstream_guard.py --port 8099 --expect by-model
+```
+
+Measured over the first two hours with both families on that chain:
+`claude-opus-5-5` 13 requests, 33,060 tokens saved; `gpt-5-6-sol` 78 requests,
+17,896 tokens saved.
+
+The guard itself does not cost tokens. Measured direct vs proxied, same body
+and key: `input_tokens` 65 and 65, `output_tokens` 16 and 16, latency 2.2s
+both ways. It forwards the body unchanged and adds nothing to the prompt.
+Two costs that are not token costs: the response is buffered, so the first
+token arrives later, and a rejected response makes the client retry a request
+the upstream has already billed.
+
+## Which upstream family answered
+
+Five response id shapes, three upstreams:
+
+| Id | Class | Meaning |
+|---|---|---|
+| `msg_01...` | A | upstream speaks Anthropic natively |
+| `msg_kpa_<uuid>` | B-minted | Anthropic-shaped id minted by the gateway |
+| `gw-<hex>-<hex>` | B-minted | gateway-minted generic id |
+| `chatcmpl-<hex>[.<hex>]` | B-openai | OpenAI-shaped upstream |
+| `resp_...` | B-openai | OpenAI Responses upstream |
+
+**A `msg_01` id is not proof that the model is Claude.** `gpt-5-6-sol`
+requested over `/v1/messages` came back as `msg_01KuhVvH8HqPbDqj4diY9G`, and
+it self-reports OpenAI. The gateway mints Anthropic-shaped ids for whatever
+answered. The only trustworthy identity check is behavioural: the self-report,
+the knowledge cutoff and the 2024 election answer, which is what
+`classify_models.py` does.
+
+Routing also depends on the request's `thinking` field, same model, same key:
+
+| `thinking` | Id | Self-report | Cutoff |
+|---|---|---|---|
+| absent | `msg_01` | Anthropic | 2026-01 |
+| `enabled` | `msg_01` | Anthropic | 2026-01 |
+| `adaptive` | `msg_01` | Anthropic | 2026-01 |
+| `disabled` | `gw-...` | Anthropic or DeepSeek | 2024-06 |
+
+opencode always sends `adaptive`, so its traffic lands on the native
+Anthropic pool. A client that disables thinking lands on the cheap pool,
+which still copies Anthropic's rate-limit headers and can claim to be
+Anthropic while answering with a 2024-06 cutoff.
+
+The gateway does not check the key against the model. `gpt-5-6-sol` on the
+claude key works, and `claude-opus-5-5` on the gpt key works, both returning
+200. The `model` field in the response always echoes what was asked for, so
+the body never discloses the substitution.
 
 ## Classifying every model
 
