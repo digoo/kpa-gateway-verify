@@ -20,6 +20,7 @@ scripts turn "it feels right" into a table.
 | `kpa_verify.py` | Main suite: 11 checks per endpoint, repeated runs, pass rates. |
 | `kpa_deep_probe.py` | Diagnostics that expose a translated or resold backend. |
 | `route_family.py` | Pin requests to one upstream family and confirm you landed there. |
+| `session_lane.py` | Report which upstream family the gateway serves for one session id. |
 | `classify_models.py` | Classify every model id into family A (genuine) or family B (the rest). |
 | `upstream_guard.py` | Proxy that verifies each response came from the expected upstream. |
 | `extract_prefix.py` | Recovers the instruction prefix the gateway injects. |
@@ -187,6 +188,47 @@ rather than being mistaken for a working pin.
 Request shape is not a reliable selector: the same shape has been observed
 returning both families minutes apart. The only dependable check is the
 response id, on every single response.
+
+### What actually selects the upstream (measured 2026-11-21)
+
+Against `https://api.kpalabz.com/v1` with the claude key, `claude-opus-5-5`
+is served by more than one backend. The lane is picked by the gateway from
+request content and the `x-opencode-session` header. Measured, 3 rounds per
+cell, interleaved:
+
+| Request | Response id | Family |
+|---|---|---|
+| real opencode request, live session id | `msg_01...` | A |
+| same request, session id one character changed | `msg_kpa_...` | B |
+| same request, no `x-opencode-session` | `msg_kpa_...` | B |
+| 6 alphabet-matched but never-seen session ids | `msg_kpa_...` | B |
+| minimal client request, no session header | `msg_01...` | A |
+
+Within an opencode-shaped request the session id decides, and only the exact
+id reaches native Anthropic. Without a session header the request body
+decides, and there the split is content-driven: `system` as a string and
+seven short blocks land on A, while a single short block, the real harness
+prompt and that same prompt as one string land on B. Changing one word of a
+generic system prompt flips the family, so the rule is not semantic.
+
+Headers that make no difference: `user-agent`, `anthropic-beta`, `b3`,
+`traceparent`, `x-session-id`, `x-session-affinity`, `x-opencode-session-id`.
+Body fields that make no difference: `tools`, `thinking`, `max_tokens`
+(32000 vs 128000), and `system` as string vs array once the body is fixed.
+
+One correction to earlier notes: `anthropic-ratelimit-*` and
+`request-id: req_...` are **not** a native-Anthropic fingerprint. Family B
+responses carry them too, synthesized by the gateway. Only the response id
+tells the two apart.
+
+`session_lane.py` checks the lane for one session id:
+
+```bash
+OPENCODE_SESSION_ID=ses_... python3 session_lane.py --samples 2
+# exact    -> family A  msg_01...
+# mutated  -> family B  msg_kpa_...
+# absent   -> family B  msg_kpa_...
+```
 
 `upstream_guard.py` sits between a client and the gateway, verifies the
 upstream family of each response, and fails closed when it does not match

@@ -25,6 +25,7 @@ Then point the client at http://127.0.0.1:8099/v1 instead of the gateway.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -51,6 +52,21 @@ def log_line(payload):
     with LOG_LOCK:
         with open(LOG_PATH, "a") as handle:
             handle.write(json.dumps(payload, default=str) + "\n")
+def brief(record):
+    """Console line. Full record (headers included) goes to the log file."""
+    return json.dumps({
+        "time": record.get("time"),
+        "model": record.get("model"),
+        "system_blocks": record.get("system_blocks"),
+        "stream": record.get("stream"),
+        "has_tools": record.get("has_tools"),
+        "max_tokens": record.get("max_tokens"),
+        "thinking": record.get("thinking"),
+        "response_id": record.get("response_id"),
+        "family": record.get("family"),
+        "status": record.get("status"),
+        "action": record.get("action"),
+    }, default=str)
 
 
 def upstream_base():
@@ -140,6 +156,15 @@ class Handler(BaseHTTPRequestHandler):
 
         family = id_family(identifier)
         system = request_body.get("system", "__ABSENT__")
+        body_sample = ""
+        if os.environ.get("GUARD_CAPTURE_BODY"):
+            body_sample = body[:1500].decode(errors="replace")
+        if os.environ.get("GUARD_CAPTURE_REQ"):
+            stamp = str(int(time.time() * 1000))
+            with open("/tmp/guard_req_%s.json" % stamp, "w") as handle:
+                json.dump({"headers": {k: v for k, v in self.headers.items()
+                                      if k.lower() not in ("x-api-key", "authorization")},
+                           "body": request_body}, handle, indent=1)
 
         record = {
             "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -152,6 +177,22 @@ class Handler(BaseHTTPRequestHandler):
             "response_id": identifier[:44],
             "family": family,
             "status": status,
+            "max_tokens": request_body.get("max_tokens"),
+            "thinking": request_body.get("thinking"),
+            "temperature": request_body.get("temperature"),
+            "msg_count": len(request_body.get("messages", [])),
+            "tool_count": len(request_body.get("tools", []) or []),
+            "sys_len": len(system) if isinstance(system, str) else sum(
+                len(b.get("text", "")) for b in system if isinstance(b, dict)),
+            "sys_sha": hashlib.sha256(
+                (system if isinstance(system, str) else
+                 json.dumps(system, sort_keys=True)).encode()).hexdigest()[:16],
+            "req_headers": {k: v for k, v in self.headers.items()
+                            if k.lower() not in ("x-api-key", "authorization")},
+            "resp_headers": {k: v for k, v in response_headers.items()
+                             if k.lower().startswith(("anthropic-ratelimit", "request-id",
+                                                     "x-kpa", "x-litellm", "x-oneapi"))},
+            "body_sample": body_sample,
         }
 
         # Fail closed. A wrong-family response is a substitute model, so refuse
@@ -161,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
             record["action"] = "rejected"
             record["reason"] = "expected family %s, got %s" % (wanted, family)
             log_line(record)
-            print(json.dumps(record, default=str), flush=True)
+            print(brief(record), flush=True)
             error = json.dumps({
                 "type": "error",
                 "error": {
@@ -179,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
 
         record["action"] = "accepted"
         log_line(record)
-        print(json.dumps(record, default=str), flush=True)
+        print(brief(record), flush=True)
 
         self.send_response(status)
         self.send_header("Content-Type",
