@@ -67,7 +67,10 @@ def main():
         sys.exit(__doc__)
     other_path = Path(sys.argv[1])
     other = json.loads(other_path.read_text())
-    expected = json.loads((Path("out") / "expected_answers.json").read_text())
+    expected_path = Path("out") / "expected_answers.json"
+    if not expected_path.exists():
+        expected_path = Path(__file__).resolve().parent / "expected_answers.json"
+    expected = json.loads(expected_path.read_text())
 
     print("")
     print("=" * 74)
