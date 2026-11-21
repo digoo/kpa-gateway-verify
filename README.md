@@ -94,8 +94,16 @@ is right every time, or wrong every time.
    test ambiguous.
 8. **Prompt cache counters.** Real Anthropic reports `cache_creation_input_tokens`
    and `cache_read_input_tokens`.
-9. **Deterministic task pass rate.** Five runs per task, with the response id
-   family printed per sample, so you can see whether failures cluster by backend.
+9. **Rate limit counters.** A real shared Anthropic account decrements
+   `Anthropic-Ratelimit-Requests-Remaining` on every call. Headers that stay
+   frozen are synthesised by a gateway.
+10. **Hidden prefix.** `cache_read` on a minimal request reveals a prefix the
+    client never sent. Asking whether that text contains specific strings
+    identifies who wrote it. An agent harness prefix means the reseller is
+    relaying into a pool of harnesses, not calling a model API directly.
+11. **Deterministic task pass rate.** Five runs per task, with the response id
+    family printed per sample, so you can see whether failures cluster by
+    backend.
 
 Note on `max_tokens`: some gateways force extended thinking on, which consumes
 the output budget before any visible text is produced. If every answer comes
@@ -184,9 +192,30 @@ first.
 | `model` field differs from what you asked for | Immediate red flag. |
 | `msg_` vs `chatcmpl-` ids across calls | Two different backends behind one endpoint. |
 | Short hex thinking signatures | Anthropic shape synthesised over another backend. |
+| `output_tokens_details.thinking_tokens` missing | OpenAI-shaped backend behind an Anthropic route. |
+| `Anthropic-Ratelimit-*` never decrements | Headers are synthesised, not passed through. |
+| `cache_read` on a request you sent nothing to | A prefix is being injected and cached. |
 | Identical chars-per-token across English, CJK and symbols | Token count is estimated, not tokenized. |
 | T5-T9 fail while the control client passes | Probably a weaker or different model. |
 | Failures cluster on one id family | Some requests hit a different backend than others. |
+
+## A worked example
+
+One endpoint, one key, two backends. The discriminator was the response id
+prefix plus four behavioural tells:
+
+| | family A | family B |
+|---|---|---|
+| id | `msg_01...` | `chatcmpl-...` |
+| identity | Anthropic, 26/26 | OpenAI / StepFun / Google / Alibaba Cloud, varies |
+| knowledge cutoff | knows 2025 events | 2024-06, denies the 2024 US election happened |
+| injected prefix | ~3.6k tokens, agent harness prompt | ~30 tokens, "You are ChatGPT ..." |
+| token accounting | real tokenizer | `chars/4` estimator |
+
+Family B was an OpenAI-compatible upstream wrapped in Anthropic shape, sold
+under a Claude model name. A single pass/fail run against that endpoint tells
+you nothing, because which backend you hit changes the answer. Run the
+rotation sweep first.
 
 ## Notes and limits
 
