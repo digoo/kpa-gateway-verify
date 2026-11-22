@@ -12,10 +12,10 @@ one it is. Two facts survive both:
             with whatever the harness in front of it suggests.
 
   accounting whether the upstream reports its own token accounting. A native
-            Anthropic API returns cache_read_input_tokens and
-            output_tokens_details.thinking_tokens. A gateway that translates
-            to an OpenAI-compatible backend estimates the input count and
-            drops the thinking accounting.
+            Anthropic API always returns cache_read_input_tokens. A gateway
+            that translates to an OpenAI-compatible backend estimates the
+            input count, echoes the gateway's own x-kpa-input-tokens-estimate
+            back as usage.input_tokens, and omits the cache counter.
 
 Both are checked here, per model id, with the id family recorded alongside.
 
@@ -130,8 +130,10 @@ def check(model, samples=1):
             total_calls += 1
             families.append(id_family(row["id"]))
             usage = row.get("usage") or {}
-            if ("cache_read_input_tokens" in usage
-                    and "thinking_tokens" in json.dumps(usage)):
+            # A native Anthropic API always reports cache_read_input_tokens.
+            # thinking_tokens only appears when the model actually thought,
+            # so it cannot be required.
+            if "cache_read_input_tokens" in usage:
                 native_calls += 1
             if dated(row["text"], expected):
                 edge = expected
