@@ -403,6 +403,15 @@ CCR versus `--lossless`. opencode's `compaction.keep_tokens` is unrelated: it
 sizes the window kept after a compaction event, and the trigger stays near
 the model's context limit.
 
+The headroom MCP is not needed in this chain. It is documented as the Claude
+Code integration, and it exposes `headroom_retrieve` so the client can
+resolve the markers headroom leaves behind. The proxy injects a tool by that
+bare name, while an MCP tool is namespaced by its server, so an opencode
+model call would not resolve to it. `--ccr-inline-resolve` makes the proxy
+settle the markers itself with no tool round-trip, and with it enabled
+headroom stopped injecting the tool entirely. Install it for Claude Code
+with `headroom mcp install` if that client is used.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
