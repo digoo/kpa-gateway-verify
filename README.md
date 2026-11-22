@@ -412,6 +412,48 @@ settle the markers itself with no tool round-trip, and with it enabled
 headroom stopped injecting the tool entirely. Install it for Claude Code
 with `headroom mcp install` if that client is used.
 
+### The key selects the pool, not the model (2026-11-21)
+
+Same model id, four routes each. Bare request: no system, no thinking, no
+session header, so nothing primes the self-report.
+
+`gpt-6-astra`:
+
+| key | endpoint | id | self-report | cutoff | 2024 election |
+|---|---|---|---|---|---|
+| gpt | `/chat/completions` | `chatcmpl-` | StepFun, StepFun | 2024-06 | Trump once, empty once |
+| gpt | `/messages` | `chatcmpl-` | StepFun, StepFun | 2024-06, 2024-07 | **"Joe Biden won"** |
+| claude | `/chat/completions` | `chatcmpl-` | OpenAI, OpenAI | 2024-06, 2026-06 | Trump, Trump |
+| claude | `/messages` | `msg_01` | OpenAI, OpenAI | empty, empty | Trump, Trump |
+
+`claude-fable-5-2`:
+
+| key | endpoint | id | self-report | cutoff | 2024 election |
+|---|---|---|---|---|---|
+| gpt | `/chat/completions` | `chatcmpl-` | OpenAI, StepFun | 2024-06 | empty, empty |
+| gpt | `/messages` | `chatcmpl-` | StepFun, OpenAI | 2024-06 | **"has not yet occurred"** |
+| claude | `/chat/completions` | `chatcmpl-` | Anthropic, Anthropic | 2026-06, 2026-01 | Trump, Trump |
+| claude | `/messages` | `msg_01` | Anthropic, Anthropic | empty, empty | Trump, Trump |
+
+Readings:
+- `gpt-6-astra` is not a GPT model on any route. Its canonical route (gpt key,
+  `/chat/completions`) answers StepFun with a 2024-06 cutoff, and on
+  `/messages` it says Joe Biden won the 2024 election.
+- `claude-fable-5-2` is genuine on the claude key (Anthropic, 2026-01/2026-06,
+  election right) and a substitute on the gpt key (StepFun or OpenAI,
+  2024-06, "the 2024 election has not yet occurred").
+- The key picks the upstream pool; the model name does not.
+- A `msg_01` id appeared for `gpt-6-astra` while it self-reported OpenAI, so
+  the id is minted and carries no information about the model.
+- The gateway injects a prefix on the claude-key route: a two-word prompt
+  billed 3,478 input tokens once, 1 to 31 on other calls. On the gpt key the
+  same prompt bills 47 to 64.
+
+In opencode the per-model apiKey decides which pool a model lands in:
+`claude-*` models carry the claude key and land on the genuine Anthropic
+pool, `gpt-*` models carry the gpt key and land on the StepFun pool. The
+`gpt-*` names are fiction.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
