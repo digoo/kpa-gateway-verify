@@ -158,6 +158,40 @@ def forward(path, headers, body, timeout=600):
         return 502, json.dumps({"error": str(exc)}).encode(), {}
 
 
+def extract_usage(body, streaming):
+    """Token usage the upstream reported, for cost comparison.
+
+    Non-streaming: payload["usage"]. Streaming: Anthropic puts the input-side
+    usage in message_start and the cache counters in message_delta, so both
+    have to be merged. Reading only message_start shows cache_read as absent.
+    """
+    if not body:
+        return {}
+    if streaming:
+        usage = {}
+        for line in body.decode(errors="replace").splitlines():
+            if not line.startswith("data:"):
+                continue
+            chunk = line[5:].strip()
+            if not chunk or chunk == "[DONE]":
+                continue
+            try:
+                obj = json.loads(chunk)
+            except Exception:
+                continue
+            if obj.get("type") == "message_start":
+                usage.update(obj.get("message", {}).get("usage", {}) or {})
+            elif obj.get("type") == "message_delta":
+                for key, value in (obj.get("usage", {}) or {}).items():
+                    if value:
+                        usage[key] = value
+        return usage
+    try:
+        return json.loads(body).get("usage", {}) or {}
+    except Exception:
+        return {}
+
+
 def header_value(headers, name):
     """Case-insensitive header lookup. Upstreams send content-type, not
     Content-Type, and a missed lookup turns an SSE body into a parse error."""
@@ -268,6 +302,7 @@ class Handler(BaseHTTPRequestHandler):
                              if k.lower().startswith(("anthropic-ratelimit", "request-id",
                                                      "x-kpa", "x-litellm", "x-oneapi"))},
             "body_sample": body_sample,
+            "usage": extract_usage(body, streaming),
         }
 
         # Fail closed. A wrong-family response is a substitute model, so refuse

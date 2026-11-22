@@ -379,6 +379,30 @@ Two costs that are not token costs: the response is buffered, so the first
 token arrives later, and a rejected response makes the client retry a request
 the upstream has already billed.
 
+## The chain in production
+
+```
+opencode -> guard :8099 -> headroom :8787 -> rtk-proxy :8080 -> api.kpalabz.com
+```
+
+The guard is a launchd service (`app.kpa.upstream-guard`), the local proxies
+are launchd services too (`com.headroom.default`, `app.rtk-ai.rtk-proxy`).
+headroom runs in **cache** mode, which freezes prior turns so the provider's
+prefix cache hits. Measured on an identical probe, prefix warm:
+
+| chain | fresh | cache_read | billable_equiv |
+|---|---|---|---|
+| rtk only | 1,162 | 80,081 | 9,170 |
+| + headroom cache mode | 533 | 78,161 | **8,349** |
+| + headroom token mode | 32,591 | 17,745 | **34,366** |
+
+Token mode compresses by rewriting prior turns, which changes the prefix and
+throws the provider's cache away: 3.7x the cost. headroom has no
+`keep_tokens`; its knobs are `--target-ratio`, `--protect-tool-results` and
+CCR versus `--lossless`. opencode's `compaction.keep_tokens` is unrelated: it
+sizes the window kept after a compaction event, and the trigger stays near
+the model's context limit.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
