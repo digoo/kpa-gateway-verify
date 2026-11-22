@@ -21,6 +21,7 @@ scripts turn "it feels right" into a table.
 | `kpa_deep_probe.py` | Diagnostics that expose a translated or resold backend. |
 | `route_family.py` | Pin requests to one upstream family and confirm you landed there. |
 | `session_lane.py` | Report which upstream family the gateway serves for one session id. |
+| `trust.py` | Verify per model id that the endpoint serves a current model: knowledge frontier plus native token accounting. |
 | `classify_models.py` | Classify every model id into family A (genuine) or family B (the rest). |
 | `upstream_guard.py` | Proxy that verifies each response came from the expected upstream. |
 | `extract_prefix.py` | Recovers the instruction prefix the gateway injects. |
@@ -531,6 +532,77 @@ site's own rating): Step-1 released 2024-01, cutoff 2023-09; Step-2 released
 2024-07, cutoff 2024-04; Step-3 released 2025-06, cutoff 2025-03. What the
 gateway serves as "StepFun" self-reports 2024-06 or 2024-07 and scores 0/6
 on the ladder, which matches the Step-2 generation rather than Step-3.
+
+## How to use a gateway like this
+
+The rules below are measured, not guessed. Every number comes from a probe
+that can be re-run with `trust.py`.
+
+### 1. The key picks the pool, not the model name
+
+One endpoint and one URL, two keys, and the key decides which upstream pool
+answers. On the same endpoint, with the same model id:
+
+| key | self-report | knowledge frontier | 2024 election |
+|---|---|---|---|
+| claude key | Anthropic | 2026-06 | correct |
+| gpt key | StepFun, OpenAI, or varies | before 2024-11 | often wrong |
+
+The gpt key does not even know the 2024 election result. Point every model id
+at the key whose pool is current, and keep the other key for comparison.
+
+### 2. Measure the frontier by date, never by asking
+
+Asking a model for its knowledge cutoff does not work. On the same model, in
+the same minute: a refusal, then 2026-06, then 2025-06, then an empty
+reply. Asking "name the most recent dated event you know about" is worse: the
+answers came back as the 2024 UEFA Champions League final, the 2024 Summer
+Olympics opening ceremony, the 2024 WWDC keynote, from models that place
+November 2025 correctly when asked about it directly. That probe returns a
+canonical famous event, not the frontier.
+
+What works is asking for the month and year of a known event:
+
+```
+In which month and year did the following happen? Reply with only the month
+and year, like 2025-08.
+Anthropic released Claude Opus 4.5
+```
+
+The last event the model places correctly is the edge of its knowledge. That
+is what `trust.py` does.
+
+### 3. Two facts survive the gateway, everything else does not
+
+| signal | what it actually proves |
+|---|---|
+| self-report ("I am Anthropic") | nothing. The gateway injects a persona server side, so models answer "Anthropic" while a substitute serves them. |
+| response id | which protocol the upstream speaks, not which model it was. The gateway mints `msg_01` ids for non-Anthropic models. |
+| `anthropic-ratelimit-*` headers | nothing. The gateway synthesizes them for every family. |
+| **knowledge frontier** | the only trustworthy identity signal. |
+| **native token accounting** | `cache_read_input_tokens` plus `output_tokens_details.thinking_tokens` together mean the upstream is a native Anthropic API. An estimated count with no thinking accounting means a translation layer. |
+
+### 4. Dialect matters, and so does the request shape
+
+The same model on the same key answers differently depending on the route.
+Measure on the route you will actually use. In opencode's own request shape
+(7-block system prompt, tools, thinking adaptive, Anthropic beta headers) the
+answers differ from a bare request on the same endpoint.
+
+### 5. Use the guard, and keep the log
+
+```
+opencode -> guard :8099 -> headroom :8787 -> rtk-proxy :8080 -> gateway
+```
+
+The guard records the response id, the id family, the token usage and the
+native-accounting flag for every single response. That log is the evidence
+base: when an answer looks wrong, the log says which pool answered.
+
+Run it in observe mode first, then switch to `--expect by-model` if you want
+substitutes rejected outright. Enforcement interrupts: the gateway rotates a
+session between pools, and the client then retries a request the upstream has
+already billed.
 
 ## Which upstream family answered
 
