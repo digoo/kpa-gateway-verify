@@ -604,6 +604,31 @@ substitutes rejected outright. Enforcement interrupts: the gateway rotates a
 session between pools, and the client then retries a request the upstream has
 already billed.
 
+### Correction: the Mythos probe was measuring context, not weights
+
+Anthropic's Mythos tier (Mythos 5 released June 9, 2026, Mythos-tier models
+are Claude Mythos 5 and Claude Fable 5) looked like a model-level
+fingerprint: taken from the reference system prompts in
+digoo/spiritual-spell-red-teaming, and answered by some models and not others.
+It is not. Four requests, same model, same key, one question:
+
+| system field | answer |
+|---|---|
+| none | empty |
+| "You are a helpful assistant." | no Mythos |
+| one mention of "Anthropic has a Mythos tier" | no Mythos |
+| the exact facts: "Mythos-tier models are Claude Mythos 5 and Claude Fable 5, first released June 2026" | **Claude Mythos 5, Claude Fable 5** |
+
+One sentence of context produces the exact answer, so the model was reading it
+off the prompt. The earlier reading, that `claude-fable-5-2` knows Anthropic's
+product line and `claude-fable-5-1` does not, was the opencode harness prompt
+doing the work. The gateway's own catalogue lists no Mythos entry, and the
+injected prefix is 3,584 cached tokens of agent-harness text.
+
+Consequence: only two signals survive, the knowledge frontier and native token
+accounting, and both are about the pool, not about the model generation. A
+model id on this gateway is a label; what you get is a pool.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
