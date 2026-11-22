@@ -662,6 +662,56 @@ fingerprint until one sentence mentioning Mythos in the system field produced
 the exact answer, names and release date included. Measure with dated events
 the harness never mentions.
 
+### Every model, measured (2026-11-21, final)
+
+opencode's own request shape, claude key, 8 dated-event probes plus a
+future-event check per model. Frontier is the last dated fact placed
+correctly; native is how many of the 8 responses carried
+cache_read_input_tokens.
+
+| model | frontier | native accounting | id families seen |
+|---|---|---|---|
+| `claude-fable-5-2#max` | 2026-02 | 8/8 | A,B-minted |
+| `claude-fable-5-1` | 2026-02 | 8/8 | A |
+| `claude-fable-5` | 2026-02 | 8/8 | B-minted |
+| `claude-opus-5-5` | 2026-06 | 8/8 | B-minted |
+| `claude-opus-5` | 2026-06 | 8/8 | A,B-minted |
+| `claude-opus-4-7` | 2026-06 | 8/8 | B-minted |
+| `claude-opus-4-8` | 2026-02 | 8/8 | A |
+| `claude-sonnet-5-5` | 2026-06 | 8/8 | A |
+| `claude-sonnet-5` | 2026-06 | 8/8 | B-minted |
+| `claude-sonnet-4-6` | 2026-02 | 7/8 | B-minted |
+| `claude-haiku-5-5` | 2026-02 | 8/8 | B-minted |
+| `claude-haiku-4-5` | 2026-06 | 8/8 | B-minted |
+| `gpt-5-6-sol` | 2026-06 | 7/8 | B-minted |
+| `gpt-5-6-terra` | 2026-02 | 8/8 | A,B-minted |
+| `gpt-5-6-luna` | 2026-06 | 7/8 | A,B-minted |
+| `gpt-6-astra` | 2026-02 | 8/8 | A |
+| `gpt-5-5` | 2026-02 | 8/8 | A |
+| `gpt-5-4` | 2026-02 | 7/8 | B-minted |
+| `gpt-5-4-mini` | 2026-06 | 8/8 | B-minted |
+
+All nineteen are current. The five ids I had earlier called stale
+(`claude-fable-5-2`, `claude-sonnet-5-5`, `claude-sonnet-4-6`,
+`claude-opus-4-8`, `gpt-5-6-luna`) were a measurement artefact: the yes/no
+ladder counted a model as failing when it answered with the fact instead of
+the word. Asked for the month and year, they all place 2026-02 and later.
+The correction matters, because it moved the conclusion from "five of these
+ids are stale, do not use them" to "all of them are fine on this key".
+
+The id family column stays mixed and stays uninformative: `B-minted` for a
+current model, `A` for another, and both within the same model id. That is
+the whole point: the id says which protocol the upstream spoke, not which
+model it was.
+
+What is left to distrust: the model *generation*. The frontier proves the
+pool knows events through 2026-02 or 2026-06. It does not prove the pool is
+Fable rather than Opus, or GPT-6 rather than GPT-5. A reseller can serve one
+current model under every name, and nothing in the response distinguishes
+them. The only way to tell generations apart is to compare behaviour against
+a reference implementation, which for a closed model means the published
+system prompts, and those live in the prompt, not in the weights.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
