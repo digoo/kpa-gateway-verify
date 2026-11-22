@@ -454,6 +454,84 @@ In opencode the per-model apiKey decides which pool a model lands in:
 pool, `gpt-*` models carry the gpt key and land on the StepFun pool. The
 `gpt-*` names are fiction.
 
+### Measuring the cutoff without asking for it (2026-11-21)
+
+Models refuse or fudge the direct question. On the claude key the same model
+answered "I don't share details about my internal configuration", then 2026-06,
+then 2025-06, then an empty reply. Asking "name the most recent dated event
+you know about" is worse: the answers came back as the 2024 UEFA Champions
+League final, the 2024 Summer Olympics opening ceremony, the 2024 WWDC keynote
+while the same model confirmed a November 2025 event when asked about it
+directly. That probe returns a canonical famous event, not the frontier.
+
+The event ladder is the instrument. Six dated facts, yes or no, and the last
+one confirmed is the edge of the knowledge:
+
+| event | date |
+|---|---|
+| 2024 US election result | 2024-11 |
+| DeepSeek R1 | 2025-01 |
+| Meta Llama 4 | 2025-04 |
+| gold standard at the 2025 IMO | 2025-07 |
+| GPT-5 | 2025-08 |
+| Claude Opus 4.5 | 2025-11 |
+
+Scores, claude key:
+
+| model | route | ladder |
+|---|---|---|
+| gpt-6-astra | `/messages` | 6/6 |
+| gpt-6-astra | `/chat/completions` | 6/6 |
+| claude-fable-5-2 | `/messages` | 6/6 |
+| gpt-5-6-sol | `/chat/completions` | 6/6 |
+| gpt-6-astra | gpt key, `/chat/completions` | **0/6** |
+| claude-fable-5-2 | gpt key, `/chat/completions` | **0/6** |
+
+The gpt key does not even know the 2024 election result.
+
+### The key picks the pool
+
+With every model moved to the claude key, a sweep of all 19 ids in opencode's
+own request shape. "current" means the model confirms the August 2025 GPT-5
+event; the id family comes from the guard:
+
+| model | id family | knows Aug 2025 | 2024 election |
+|---|---|---|---|
+| claude-opus-5-5 | A | yes | yes |
+| claude-opus-5 | A | yes | yes |
+| claude-opus-4-7 | A | yes | yes |
+| claude-fable-5-1 | A | yes | yes |
+| gpt-5-6-sol | A | yes | yes |
+| gpt-6-astra | A | yes | yes |
+| gpt-5-4 | A | yes | yes |
+| gpt-5-4-mini | A | yes | yes |
+| claude-fable-5 | B-minted | yes | yes |
+| claude-sonnet-5 | B-minted | yes | yes |
+| claude-haiku-5-5 | B-minted | yes | yes |
+| claude-haiku-4-5 | B-minted | yes | yes |
+| gpt-5-5 | B-minted | yes | yes |
+| gpt-5-6-terra | B-minted | yes | **no** |
+| claude-fable-5-2 | B-minted | **no** | yes |
+| claude-sonnet-5-5 | B-minted | **no** | yes |
+| claude-sonnet-4-6 | B-minted | **no** | yes |
+| claude-opus-4-8 | B-minted | **no** | yes |
+| gpt-5-6-luna | B-minted | **no** | yes |
+
+Two things to keep in mind. The id family is a weak proxy: many current models
+wear B-minted ids, and a gpt model wore a native `msg_01` id earlier. And
+opencode's own system prompt carries an identity block, so `claude-sonnet-5-5`
+answered the identity question with "model: Claude | company: ..." copied out
+of the harness. The knowledge probe is the contamination-free signal; the
+self-report is not.
+
+### StepFun's cutoffs
+
+From the public compilation at knowledge-cutoff.date (low confidence by the
+site's own rating): Step-1 released 2024-01, cutoff 2023-09; Step-2 released
+2024-07, cutoff 2024-04; Step-3 released 2025-06, cutoff 2025-03. What the
+gateway serves as "StepFun" self-reports 2024-06 or 2024-07 and scores 0/6
+on the ladder, which matches the Step-2 generation rather than Step-3.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
