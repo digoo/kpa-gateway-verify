@@ -22,6 +22,7 @@ scripts turn "it feels right" into a table.
 | `route_family.py` | Pin requests to one upstream family and confirm you landed there. |
 | `session_lane.py` | Report which upstream family the gateway serves for one session id. |
 | `trust.py` | Verify per model id that the endpoint serves a current model: knowledge frontier plus native token accounting. |
+| `identity_probe.py` | Try to break a model's identity open with persona-rejection, push-prompt and audit-framing techniques. |
 | `classify_models.py` | Classify every model id into family A (genuine) or family B (the rest). |
 | `upstream_guard.py` | Proxy that verifies each response came from the expected upstream. |
 | `extract_prefix.py` | Recovers the instruction prefix the gateway injects. |
@@ -628,6 +629,38 @@ injected prefix is 3,584 cached tokens of agent-harness text.
 Consequence: only two signals survive, the knowledge frontier and native token
 accounting, and both are about the pool, not about the model generation. A
 model id on this gateway is a label; what you get is a pool.
+
+## Breaking the identity open does not work
+
+The techniques in [digoo/jailbreaks](https://github.com/digoo/jailbreaks) and
+[digoo/spiritual-spell-red-teaming](https://github.com/digoo/spiritual-spell-red-teaming)
+are built to defeat instruction overrides, which is exactly the problem here:
+the gateway injects an Anthropic-flavoured persona server side, so a substitute
+answers "Anthropic" as readily as a genuine model does.
+
+`identity_probe.py` applies three of them, three samples each, against a
+control:
+
+| technique | from | answer |
+|---|---|---|
+| control | plain question | Anthropic, Anthropic, Anthropic |
+| persona-rejection | injection-detection pattern | Anthropic, Anthropic, Anthropic |
+| push-prompt | reflection prompt from those repos | no vendor named, 3/3 |
+| audit-framing | serving-upstream audit question | 2/3 unnamed, 1/3 Anthropic |
+
+No technique moved the answer. The persona holds, and the self-report stays
+"Anthropic" on a genuine model and on a substitute alike. The useful
+conclusion is negative and worth stating plainly: identity cannot be broken
+open here, it can only be measured. Use `trust.py` for that, and read the
+answer through the knowledge frontier and the token accounting.
+
+One more trap, since it produced a wrong conclusion first time: a
+product-knowledge probe is worthless if the facts are in the context. Asking
+for Anthropic's Mythos-tier models, which the reference system prompts in
+digoo/spiritual-spell-red-teaming document, seemed like a model-level
+fingerprint until one sentence mentioning Mythos in the system field produced
+the exact answer, names and release date included. Measure with dated events
+the harness never mentions.
 
 ## Which upstream family answered
 
