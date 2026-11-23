@@ -712,6 +712,57 @@ them. The only way to tell generations apart is to compare behaviour against
 a reference implementation, which for a closed model means the published
 system prompts, and those live in the prompt, not in the weights.
 
+### Every model, measured (2026-11-22, no-browsing canonical)
+
+Direct API, no agent loop, no tools, no browsing. Whatever the model answers
+comes from its weights. This is the measurement that counts.
+
+**Correction from earlier:** the 2026-06 frontier was an artefact. The agent
+run with websearch allowed the model to look up recent events, so the probe
+measured the search engine, not the model. With browsing blocked the real
+frontier is 2025-11 to 2026-02.
+
+**Second correction:** the B-minted id family was also an artefact of the
+agent loop. With direct API and no tool use every id returns the same
+`msg_01...` identifier prefix (family A). The B-minted ids were produced by
+the tool-calling path in the upstream, not by the model itself.
+
+| model | frontier | native accounting | id family | verdict |
+|---|---|---|---|---|
+| `claude-fable-5-2` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-fable-5-1` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-fable-5` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-opus-5-5` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-opus-5` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-opus-4-7` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-opus-4-8` | 2025-11 | 8/8 | A | PARTIAL |
+| `claude-sonnet-5-5` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-sonnet-5` | 2025-11 | 8/8 | A | PARTIAL |
+| `claude-sonnet-4-6` | 2025-11 | 8/8 | A | PARTIAL |
+| `claude-haiku-5-5` | 2026-02 | 8/8 | A | CURRENT |
+| `claude-haiku-4-5` | 2026-02 | 8/8 | A | CURRENT |
+| `gpt-5-6-sol` | 2026-02 | 7/8 | A | CURRENT |
+| `gpt-5-6-terra` | 2025-11 | 8/8 | A | PARTIAL |
+| `gpt-5-6-luna` | 2026-02 | 8/8 | A | CURRENT |
+| `gpt-6-astra` | 2025-11 | 7/8 | A | PARTIAL |
+| `gpt-5-5` | 2026-02 | 7/8 | A | CURRENT |
+| `gpt-5-4` | 2025-11 | 8/8 | A | PARTIAL |
+| `gpt-5-4-mini` | 2026-02 | 8/8 | A | CURRENT |
+
+### Why the gap between CURRENT and PARTIAL is real
+
+Five ids (opus-4-8, sonnet-5, sonnet-4-6, gpt-5-6-terra, gpt-6-astra, gpt-5-4)
+place the gold-medal IMO event at 2025-07 incorrectly. That event was July 2025,
+and all six fail it — the same failure across multiple probes, not a fluke.
+They all still answer 2025-11 correctly, so they are not stale; they are
+just behind the frontier by one dated fact.
+
+What remains unverifiable is the model generation. A reseller can serve one
+current model under every name, and nothing in the response distinguishes
+Fable from Opus. Only behavioural comparison against a reference could
+separate them, and for closed models that reference lives in the prompt, not
+the weights.
+
 ## Which upstream family answered
 
 Five response id shapes, three upstreams:
